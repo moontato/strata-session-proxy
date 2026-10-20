@@ -1,0 +1,32 @@
+# Copy to ignored config.local.yaml. These are generic examples, not deployment settings.
+server:
+  listen_host: "127.0.0.1"
+  listen_port: 8082
+  backend_url: "http://127.0.0.1:8081"
+  connect_timeout_seconds: 10
+  read_timeout_seconds: 0  # unlimited; accommodates long prefill and idle SSE
+  shutdown_timeout_seconds: 3600
+  detection_max_bytes: 8388608
+
+snapshots:
+  enabled: false  # start as an ordinary proxy; read docs before opting in
+  exclusive_backend: false  # true only after enforcing exclusive access to Strata
+  compatibility_key: ""  # set your own non-secret deployment revision before enabling
+  directory: "/var/lib/strata-session-proxy/snapshots"
+  state_directory: "/var/lib/strata-session-proxy/state"
+  required_mount: ""  # for mounted storage: its exact mountpoint, not merely a parent directory
+  save_threshold_percent: 30
+  auto_save: true
+  max_snapshots: 5
+  eviction_policy: "lru"
+  min_free_disk_gib: 10
+  operation_timeout_seconds: 7200
+  idle_timeout_seconds: 120
+  poll_interval_seconds: 0.1
+  admin_token_env: "STRATA_PROXY_BACKEND_TOKEN"
+
+# Zero means unknown/unconfigured. These do NOT constitute energy measurements.
+estimates:
+  power_watts: 0
+  prefill_tokens_per_second: 0
+  electricity_price_per_kwh: 0

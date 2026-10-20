@@ -1,0 +1,29 @@
+# EXAMPLE ONLY. Edit a private copy before installing.
+# User/Group must match the owner of Strata's private 0600 session files.
+[Unit]
+Description=Transparent disk-backed Strata session proxy
+Wants=network-online.target
+After=network-online.target
+# Set mount dependencies for your actual storage, on BOTH proxy and Strata services:
+# RequiresMountsFor=/var/lib/strata-session-proxy/snapshots
+
+[Service]
+Type=simple
+User=strata-proxy
+Group=strata-proxy
+WorkingDirectory=/opt/strata-session-proxy
+EnvironmentFile=-/etc/strata-session-proxy/environment
+ExecStart=/opt/strata-session-proxy/venv/bin/strata-session-proxy --config /etc/strata-session-proxy/config.yaml serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/strata-session-proxy
+# Must exceed your worst expected inference + snapshot + idle-confirmation time.
+TimeoutStopSec=4h
+
+[Install]
+WantedBy=multi-user.target
