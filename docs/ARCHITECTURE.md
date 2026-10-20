@@ -36,7 +36,8 @@ length-framed SHA-256 chain. Scope includes API path, authentication digests, bo
 than explicitly known generation-only controls, and query/extension-header digests. A user
 message is required; a shared system/developer prompt alone is insufficient. Stored state contains
 only digests, not raw history. An earlier full input prefix can match a longer history or a rewind;
-a shared later message boundary can nominate a branch. Longest matching candidate wins, with
+a shared user-bearing message boundary can nominate a branch (including a short first-user
+prefix, but never system-only overlap). Longest matching candidate wins, with
 recency as tiebreaker. Hashes select a candidate **only**—Strata's exact token/image-prefix checks
 are the final authority, especially when an assistant response was edited.
 
@@ -46,6 +47,29 @@ actual user content may nominate the same state, which is safe only because Stra
 real prompt before reuse. Mutable external image/file references fall back; inline data identity
 is hashed. Unknown APIs, bodies over the cap, compressed inputs, invalid JSON and
 `strata_checkpoint:false` do not acquire identities but still forward normally.
+
+### Continuation is not candidate overlap
+
+`Identity.overlap()` is symmetric and is used **only to rank saved candidates**. It must never
+prove that the active session can be overwritten without preservation. `Identity.continues()`
+is directional: the incoming chain must strictly extend the **entire** active input chain,
+with the same scope, not merely share its beginning. The prior input must end at a user/tool
+boundary; the extension must start with an assistant message and end at a new user/tool boundary.
+
+Sibling branches, rewinds, identical-input retries/regenerations, assistant-only prefills,
+new system/developer instructions and unclear response boundaries take the switch path. Eligible outgoing state is saved **before**
+forwarding. A normal full-history extension, including a tool-call/result turn, avoids snapshot
+I/O. Role boundaries are transient metadata; the on-disk fingerprint format is unchanged, and
+loaded candidates cannot be mistaken for an observed active history.
+
+The active identity describes the last **incoming request**, not the complete idle KV. Strata
+also holds consumed generated assistant tokens. The normal extension rule assumes the appended
+assistant message represents that response; without reconstructing outputs, the proxy cannot
+verify this correspondence. Editing an already-observed message is detected as a branch; editing
+only the newly appended assistant response while preserving the full prior input is not detectable
+as such. Strata still validates its token/image prefix, but preservation of that unobserved generated
+tail is not guaranteed. No exact-output/KV equality is claimed. Response reconstruction, especially
+across reasoning/tool SSE dialects, is intentionally not introduced by this focused correction.
 
 ## Coordination state machine
 
@@ -68,9 +92,14 @@ snapshot directories. The asyncio lock spans:
    behavior that cannot be correlated conservatively loses cache eligibility.
 6. Record prompt utilization, hashes and counters. Later calls validate this observation again.
 
-Known read-only GET/HEAD monitoring routes bypass the lock. Unknown routes, including unknown
-GET endpoints, enter the gate because future endpoints might mutate state. Unsupported requests
-invalidate active identity. This may reduce hit rate; it cannot teach the proxy a nonexistent API.
+Audited GET/HEAD monitoring/configuration views and static/file reads, POST token counts, and
+Strata's global OPTIONS preflight bypass the lock without saving, hashing files, updating the
+catalog, or invalidating active identity—even while inference is streaming. This is a method-
+specific allowlist, not a general exemption for GET or tokenization-looking paths. Classification
+uses raw paths with Strata's trailing-slash normalization; forwarded paths/queries/bodies remain
+unchanged. See [the endpoint audit](UPSTREAM.md#endpoint-safety-audit) for the full list and citations.
+Unknown routes and mutating methods remain gated and invalidate active identity after forwarding.
+In particular, POST `/settings` and `/config` do not inherit their GET exemptions.
 
 A separate coordinator task survives HTTP handler cancellation. It finishes any in-flight snapshot
 command, cancels ordinary forwarding on client disconnect, and waits for backend idle before

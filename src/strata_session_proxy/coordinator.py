@@ -58,7 +58,9 @@ class Coordinator:
         if self.observed and self.observed.stamp != obs.stamp:
             self.invalidate()
             self.store.count("external_changes")
-        if identity and self.active and identity.overlap(self.active):
+        # Candidate overlap is symmetric and includes siblings/rewinds. Only a
+        # directional extension of the whole active input may skip preservation.
+        if identity and identity.continues(self.active):
             return obs
         row = None
         try:

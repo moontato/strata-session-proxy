@@ -25,6 +25,9 @@ HOP = {
     "transfer-encoding",
     "upgrade",
 }
+# Method-specific slot-read-only policy, audited against the pinned Strata source.
+# Do not infer safety from a route name (e.g. /tokenize), or from GET alone.
+# See docs/UPSTREAM.md for handlers, aliases and explicit exclusions.
 READ_ONLY = {
     "/health",
     "/api/health",
@@ -36,7 +39,29 @@ READ_ONLY = {
     "/metrics",
     "/v1/telemetry",
     "/status",
+    "/metrics/prometheus",
+    "/api/requests",
+    "/settings",
+    "/config",
+    "/mcp",
+    "/",
+    "/api-monitor",
 }
+READ_ONLY_FILES = ("/fonts/", "/web/", "/v1/images/files/")
+TOKEN_COUNTS = {"/v1/messages/count_tokens", "/v1/v1/messages/count_tokens"}
+
+
+def slot_read_only(method, raw_path):
+    # Strata strips trailing slashes before dispatch but does not URL-decode paths.
+    # This normalization classifies only; forward() always retains the original target.
+    path = raw_path.rstrip("/") or "/"
+    if method == "OPTIONS":
+        return True  # Strata's global CORS handler sends 204 without dispatching by path.
+    if method in {"GET", "HEAD"}:
+        return path in READ_ONLY or path.startswith(READ_ONLY_FILES)
+    return method == "POST" and path in TOKEN_COUNTS
+
+
 CONFIG = web.AppKey("config", object)
 CLIENT = web.AppKey("client", aiohttp.ClientSession)
 MANAGER = web.AppKey("manager", object)
@@ -111,6 +136,7 @@ async def request_body(request, limit):
                 rehash(identity.scope),
                 tuple(map(rehash, identity.chain)),
                 tuple(map(rehash, identity.anchors)),
+                identity.roles,
             )
         return body, identity
     return request.content.iter_chunked(65536), None
@@ -224,7 +250,7 @@ async def handle(request):
         identity = None
     else:
         body, identity = await request_body(request, request.app[CONFIG].server.detection_max_bytes)
-    if manager is None or request.method in {"GET", "HEAD"} and request.path in READ_ONLY:
+    if manager is None or slot_read_only(request.method, request.rel_url.raw_path):
         try:
             return (await forward(request, body))[0]
         except ConnectionError:

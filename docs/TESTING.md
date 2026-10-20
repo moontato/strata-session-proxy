@@ -2,7 +2,7 @@
 
 ## Automated mock suite
 
-Verified in the development container: **80 tests passed**, including a run with warnings treated
+Verified in the development container after the focused branch/endpoint correction: **145 tests passed**, including a run with warnings treated
 as errors, on Linux x86-64 / Python 3.11 with aiohttp 3.14.5. Ruff lint/format checks, bytecode
 compilation and dependency consistency checks passed. A wheel was built and installed into a
 separate clean virtual environment; its CLI validated the generic example without network access.
@@ -31,7 +31,7 @@ rejects external socket connections and DNS lookups; tests never load a deployme
 | Same conversation / no unnecessary writes | No snapshot actions on repeated/extended history, including generation-parameter changes |
 | Threshold below / exactly at / above | Parameterized 200/299/300/400/900 tokens against 1,000-token context and 30% threshold |
 | Switch and restore | Ordered save/restore/inference events; restored-prefix cache counter |
-| Exact prefix / shared systems / branches | `test_identity_storage_config.py`, canonical histories, role/content/tool changes, scope partitioning |
+| Exact prefix / shared systems / branches | `test_identity_storage_config.py` and `test_branch_switches.py`: directional continuation vs symmetric candidate overlap; synthetic 180K shared + 20K/15K sibling branches, A saved before B and restored on return, multiple siblings, short/system-only prefixes, replays, rewinds, ambiguous boundaries and normal tool/streaming continuations |
 | Client independence | Ordinary requests without custom headers, both supported API dialects; User-Agent excluded from identity |
 | LRU / count limit | LRU recency touch, eviction, count limit, lowered limit behavior in reconciliation code; requested incoming snapshot protected at limits 1 and 2 |
 | Disk full / unavailable storage | Mock disk-usage floor, backend 507, renamed/missing snapshot directory, mount prerequisite |
@@ -43,10 +43,18 @@ rejects external socket connections and DNS lookups; tests never load a deployme
 | Generic Linux config | YAML/env precedence, strict types/ranges, origin validation, private directory/lock checks, local CLI |
 | HDD-like behavior | Artificial slow save/restore; first SSE event and read-only monitoring remain independently observable |
 | Disabled mode | No control calls or state directory; request-body streaming without parsing |
+| Harmless endpoint policy | `test_endpoint_policy.py`: method-specific status/config/static/token-count/OPTIONS bypass; active identity and SQLite change count unchanged, including during SSE; unknown/mutating/encoded lookalike paths remain gated and byte-preserving |
+| Integrity overhead unchanged | Exactly one full-file hash per save and one before restore; no hash on normal continuations; existing corruption/failed-restore tests retained |
 | Stale/out-of-band slot | Direct synthetic bypass inference invalidates prior association; unknown proxy mutation drops active identity |
 | Crash bookkeeping | Incomplete operation marker persists; committed replacement survives deletion failure; tombstone reconciliation; unrelated files retained |
 | HTTP protocol level | Raw HTTP/1.1 socket with chunked upload, exact decoded payload, encoded path/query; hop-by-hop filtering; absolute-target rejection prevents upstream-origin override |
 | Privacy and estimates | Sanitized error messages, local-only status, no payload/model disclosure in catalog report, configured estimate formulas |
+
+The long-sibling regression was also run against a scratch copy of the original coordinator:
+both streaming and nonstreaming variants failed at the expected missing-save assertion
+(`inference, inference` instead of `inference, save, inference`). The corrected implementation
+passes those regressions. The large token counts are synthetic backend accounting, not actual
+180K-token inference or a physical large-KV benchmark.
 
 The tests exercise conservative behavior—not perfect detection of unobservable external changes.
 The source/API limitations in [UPSTREAM.md](UPSTREAM.md) still apply.

@@ -56,6 +56,36 @@ class Identity:
     scope: str
     chain: tuple[str, ...]
     anchors: tuple[str, ...]
+    # Request-only boundary information, kept in memory. Persisted identities are
+    # candidates, never authoritative active histories, so the catalog schema is unchanged.
+    roles: tuple[str, ...] = ()
+
+    def continues(self, active):
+        """A directional input-history extension, NOT proof of the live KV/output tokens.
+
+        Replays, rewinds, siblings and assistant-prefill/unclear response boundaries
+        take the switch path. A normal next turn preserves the ENTIRE previous input,
+        appends an assistant response, and ends at a new user/tool request boundary.
+        The assistant's correspondence to the generated response cannot be proved
+        from incoming histories alone; Strata still checks the actual token prefix.
+        """
+        if active is None or self.scope != active.scope:
+            return False
+        n = len(active.chain)
+        return bool(
+            n
+            and len(self.chain) > n
+            and self.chain[:n] == active.chain
+            and active.key in active.anchors
+            and len(active.roles) == n
+            and len(self.roles) == len(self.chain)
+            and active.roles[-1] in {"user", "tool"}
+            and self.roles[n] == "assistant"
+            and self.roles[-1] in {"user", "tool"}
+            # Some templates collect system/developer messages at the prompt's start;
+            # appending one is not evidence that the rendered old prefix is preserved.
+            and all(role in {"assistant", "user", "tool"} for role in self.roles[n:])
+        )
 
     @property
     def key(self):
@@ -69,9 +99,13 @@ class Identity:
         return cls(value["scope"], tuple(value["chain"]), tuple(value["anchors"]))
 
     def overlap(self, other):
+        """Candidate score only: longest exact input prefix that includes a user message.
+
+        A positive score does not establish continuation or ownership of the active slot.
+        """
         if other is None or self.scope != other.scope:
             return 0
-        # Full previous input prefix, rewind, or a branch after a completed exchange.
+        # Full input prefix, rewind or shared user-bearing prefix of sibling branches.
         if self.key in other.chain and self.key in self.anchors:
             return len(self.chain)
         if other.key in self.chain and other.key in other.anchors:
@@ -80,7 +114,7 @@ class Identity:
         for i, (a, b) in enumerate(zip(self.chain, other.chain)):
             if a != b:
                 break
-            if a in self.anchors and i > 1:
+            if a in self.anchors:
                 n = i + 1
         return n
 
@@ -118,7 +152,7 @@ def identify(path, body, headers):
             ]
         )
         h = hashlib.sha256(scope.encode())
-        chain, anchors = [], []
+        chain, anchors, roles = [], [], []
         seen_user = False
         for m in messages:
             if not isinstance(m, dict) or m.get("role") not in {
@@ -129,6 +163,7 @@ def identify(path, body, headers):
                 "tool",
             }:
                 return None
+            roles.append(m["role"])
             part = canonical(m)
             h.update(len(part).to_bytes(8, "big"))
             h.update(part)
@@ -136,6 +171,6 @@ def identify(path, body, headers):
             seen_user |= m["role"] == "user"
             if seen_user:
                 anchors.append(chain[-1])
-        return Identity(scope, tuple(chain), tuple(anchors)) if seen_user else None
+        return Identity(scope, tuple(chain), tuple(anchors), tuple(roles)) if seen_user else None
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return None

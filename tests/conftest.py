@@ -60,6 +60,7 @@ class MockStrata:
         self.held = None
         self.loaded = True
         self.events = []
+        self.snapshot_actions = []
         self.control_calls = []
         self.received = []
         self.delay = 0
@@ -106,6 +107,7 @@ class MockStrata:
             async with self.fifo:
                 assert not self.busy
                 self.events.append(action)
+                self.snapshot_actions.append((action, name))
                 self.prompt = 0  # Actual Strata slot_action clears status prompt_tokens.
                 await asyncio.sleep(self.delay)
                 err = self.save_error if action == "save" else self.restore_error
@@ -144,6 +146,15 @@ class MockStrata:
                 )
         body = await r.read()
         self.received.append((r.method, r.raw_path, dict(r.headers), body))
+        if r.method == "OPTIONS" and "status" not in r.query:
+            # Explicit status= remains available to the arbitrary-HTTP forwarding tests.
+            return web.Response(status=204)
+        if r.method == "POST" and r.rel_url.raw_path.rstrip("/") in {
+            "/v1/messages/count_tokens",
+            "/v1/v1/messages/count_tokens",
+        }:
+            # Synthetic tokenization only: no engine/FIFO/live-slot/counter mutation.
+            return web.json_response({"input_tokens": len(json.loads(body).get("messages", [])) * 10})
         if r.path in {"/v1/chat/completions", "/v1/messages"} and r.method == "POST":
             data = json.loads(body)
             async with self.fifo:

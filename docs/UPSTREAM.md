@@ -126,3 +126,47 @@ change or malicious out-of-band race. **Exclusive backend access is a prerequisi
 hardening.** Use one proxy worker and enforce firewall/process access rules. Status drift checks
 are mitigation, not a distributed lock. Existing APIs and the backend's own exact-prefix checks
 remain authoritative; if these guarantees are insufficient, disable snapshot management.
+
+## Endpoint safety audit
+
+The focused review reused the pinned public source above; no live endpoint was queried. “Read-only”
+here means **does not mutate inference-slot/KV state**, not that a metrics counter or HTTP log can
+never change. Client authentication, bodies, responses and errors still pass through unchanged.
+
+| Method / paths | Evidence and policy |
+|---|---|
+| GET `/health`, `/api/health`, `/v1/models`, `/models`, `/props`, `/slots`, `/v1/status`, `/status` | Existing bypass. [GET dispatch](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L6068-L6144) returns status/configuration views, not inference. |
+| GET `/metrics`, `/metrics/prometheus`, `/v1/telemetry` | Bypass. [Metric/telemetry handlers](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L5840-L5869) read counters/status; Prometheus sampling may update telemetry accounting, not the inference slot. |
+| GET `/api/requests`, `/settings`, `/config`, `/mcp` | Bypass. [GET handlers](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L6039-L6060) read retained records/defaults/config/tool status. [`_config_get`](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L6441-L6450) reads the config file; it does not load/reconfigure the engine. |
+| GET `/`, `/api-monitor`, `/fonts/*`, `/web/*`, `/v1/images/files/*` | Bypass. [Fonts/web assets](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L5805-L5839), [HTML and generated-image files](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L6061-L6085) are file reads (or errors), not generation. |
+| HEAD on the same GET allowlist | Bypass retained. The inspected handler does not implement `do_HEAD`; the standard unsupported-method response is non-mutating. The proxy does not synthesize GET or promise HEAD success. |
+| POST `/v1/messages/count_tokens`, `/v1/v1/messages/count_tokens` | Bypass. [`_count_tokens`](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L6810-L6817) renders/tokenizes with `store=False`, never `svc.load()` or `prepare()`/generation. [`encode_prompt`](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L4243-L4257) explicitly does not add/replace kept prompts. The doubled-v1 [alias](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L246) is supported upstream. |
+| OPTIONS, any path | Bypass. [`do_OPTIONS`](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L5756-L5761) is a global CORS 204 handler, with no per-path state-changing dispatch. |
+| POST chat/messages/responses, image generation, slots save/restore, load/unload, VRAM reserve, settings/config changes | **Gated**, including unknown/unidentified bodies. [POST dispatch](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/serve/server.py#L6152-L6277) contains inference, lifecycle/control, and settings mutations. GET exemptions never extend to these methods. |
+| All other methods/routes | **Gated** and forwarded unchanged. No blanket GET exemption or guessed `/tokenize`/`/detokenize` exemption. A 404 in this revision does not establish a stable slot-read-only contract for unknown routes. |
+
+Classification mirrors Strata's trailing-slash stripping and ignores the query for routing; it does
+not decode percent escapes or rewrite the forwarded target. Method/path decisions are internal;
+clients supply no new headers. Reaudit this allowlist when changing the supported Strata revision.
+
+## Integrity-check I/O review
+
+No integrity behavior was removed or weakened. `Store.file_info()` sequentially reads and hashes
+the complete file in bounded 4 MiB chunks, once after each save and once before each restore.
+For a file of size **S**, one save followed by one restore adds **2S logical read bytes** beyond
+Strata's own S-byte write and S-byte restore read. N restores add `(1 + N) × S` proxy read bytes
+in total. On a cold-cache HDD this can materially increase disk work; shared storage can add
+network traffic too. OS caching may reduce actual physical reads, so no latency/energy measurement
+is inferred from those byte counts. Ordinary continuations and read-only requests hash no files.
+
+Strata already validates header and payload checksums, fingerprints, bounds, and end marker in
+[`conversation_file.cpp:1188–1255`](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/src/core/conversation_file.cpp#L1188-L1255).
+The engine then validates the whole state before device transfer
+([generate.cpp:11876–11910](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/src/program/generate.cpp#L11876-L11910)).
+This is usable defense against corrupt/incompatible files, but the HTTP acknowledgement exposes
+counts/sizes/timings, **not an authoritative digest**. The proxy's SHA-256 additionally binds its
+catalog entry to the exact bytes visible through the configured filesystem, detecting even a
+replacement with a different otherwise-valid Strata session file. Size/mtime-only validation cannot
+preserve that guarantee; parsing the native file format would add coupling without avoiding a
+full payload check. Therefore the conservative full reads remain, with no new tuning knob or
+integrity bypass. Actual HDD/energy effects still need separately approved measurement.

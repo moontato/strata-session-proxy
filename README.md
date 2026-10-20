@@ -20,12 +20,15 @@ limits](docs/UPSTREAM.md), not just the feature list, before enabling managed mo
 
 ## What it does
 
-* Serializes state-changing traffic in managed mode; known read-only monitoring endpoints
-  bypass the gate. The gate covers the entire stream and backend idle confirmation.
+* Serializes state-changing traffic in managed mode; audited read-only views/static files,
+  token-count POSTs and CORS preflights bypass the gate without snapshot or metadata writes.
+  Unknown routes stay gated. The gate covers the entire stream and backend idle confirmation.
 * Matches exact, incrementally hashed message-history prefixes. Shared system prompts alone
   never match. Histories, tools, media identity, relevant options and authentication scope matter.
-* Saves only when switching away from a successfully correlated, eligible session. Same-session
-  continuations cause no snapshot writes. Small SQLite bookkeeping writes are separate.
+* Saves only when switching away from a successfully correlated, eligible session. Divergent
+  branches, rewinds, replays and ambiguous response boundaries are switches—not continuations
+  merely because they share a prefix. Strict full-input-history extensions with normal assistant
+  response/user-or-tool boundaries avoid snapshot writes. Small SQLite bookkeeping writes are separate.
 * Restores compatible candidates, then forwards the **original request**. Strata decides which
   exact token/image prefix can be reused; proxy fingerprints are not permission to reuse KV.
 * Uses private SQLite metadata, unique filenames, validated publication, SHA-256 integrity,
@@ -54,6 +57,9 @@ limits](docs/UPSTREAM.md), not just the feature list, before enabling managed mo
 6. Identical histories cannot reveal whether two clients privately regard them as different
    conversations. Earlier history can nominate a checkpoint even if assistant output later
    differs. Strata must validate tokens/images. Some tails/branches will still be re-prefilled.
+   Active fingerprints cover incoming histories, not generated output. A newly appended assistant
+   message is assumed to represent the last response; edits solely to that previously unobserved
+   output cannot be detected without response reconstruction. See [continuation boundaries](docs/ARCHITECTURE.md#continuation-is-not-candidate-overlap).
 7. HTTP/1.1 origin-form request/response forwarding, not a general TCP tunnel: WebSocket upgrades,
    CONNECT, HTTP/2 end-to-end, interim-response replay and HTTP trailers are not implemented.
    Hop-by-hop headers and transfer framing are regenerated; body bytes, not wire chunk boundaries,
