@@ -46,12 +46,18 @@ class Backend:
             if body is not None
             else self.config.server.connect_timeout_seconds
         )
+
+        # Explicit JSON Content-Type for internal Strata control requests.
+        headers = self.headers()
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+
         try:
             async with self.client.request(
                 "POST" if body is not None else "GET",
                 self.url + path,
                 json=body,
-                headers=self.headers(),
+                headers=headers,
                 timeout=aiohttp.ClientTimeout(total=timeout),
                 allow_redirects=False,
             ) as r:
