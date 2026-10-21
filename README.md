@@ -29,8 +29,13 @@ limits](docs/UPSTREAM.md), not just the feature list, before enabling managed mo
   branches, rewinds, replays and ambiguous response boundaries are switches—not continuations
   merely because they share a prefix. Strict full-input-history extensions with normal assistant
   response/user-or-tool boundaries avoid snapshot writes. Small SQLite bookkeeping writes are separate.
-* Restores compatible candidates, then forwards the **original request**. Strata decides which
-  exact token/image prefix can be reused; proxy fingerprints are not permission to reuse KV.
+* Restores only candidates whose **whole saved input history** is a prefix of the new input,
+  then forwards the **original request**. Shared earlier messages or moved recent messages do
+  not suffice: disk snapshots keep one selected checkpoint, not every shared boundary. Strata
+  decides token/image compatibility; fingerprints never override its checks.
+* Compacted/rewritten histories become new active inputs. Ordinary continuations then avoid
+  snapshot I/O. Confirmed zero-reuse file/input pairs are suppressed in bounded memory for
+  10 minutes; absent telemetry is unknown, not zero. See [compaction findings and upgrade](docs/COMPACTION.md).
 * Uses private SQLite metadata, unique filenames, validated publication, SHA-256 integrity,
   LRU retention, filesystem free-space checks, mount guards and a local-only status/recovery CLI.
 * Fails closed on an uncertain save/restore, preserving a durable recovery marker. Ordinary
@@ -55,8 +60,9 @@ limits](docs/UPSTREAM.md), not just the feature list, before enabling managed mo
    completions, compressed or oversized requests, and mutable external image references—still
    forward, but do not acquire a reusable identity. This is conservative fallback, not an API adapter.
 6. Identical histories cannot reveal whether two clients privately regard them as different
-   conversations. Earlier history can nominate a checkpoint even if assistant output later
-   differs. Strata must validate tokens/images. Some tails/branches will still be re-prefilled.
+   conversations. A complete saved input can nominate a checkpoint even if assistant output
+   later differs. Strata must validate tokens/images. Speculative partial-prefix snapshots,
+   including some useful pinned/rewind cases not exposed by HTTP, are deliberately not restored.
    Active fingerprints cover incoming histories, not generated output. A newly appended assistant
    message is assumed to represent the last response; edits solely to that previously unobserved
    output cannot be detected without response reconstruction. See [continuation boundaries](docs/ARCHITECTURE.md#continuation-is-not-candidate-overlap).
@@ -211,6 +217,7 @@ not require Strata, CUDA, a GPU, network credentials, or your live endpoint.
 * [Architecture, safety, failure behavior, storage](docs/ARCHITECTURE.md)
 * [Configuration reference](docs/CONFIGURATION.md)
 * [Upstream evidence / unsupported capabilities](docs/UPSTREAM.md)
+* [History rewrites, compaction investigation, safe upgrade](docs/COMPACTION.md)
 * [Testing and optional live qualification](docs/TESTING.md)
 * [Troubleshooting](docs/TROUBLESHOOTING.md)
 * [Security and repository hygiene](SECURITY.md)

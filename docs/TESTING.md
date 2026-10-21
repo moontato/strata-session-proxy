@@ -2,7 +2,7 @@
 
 ## Automated mock suite
 
-Verified in the development container after the focused branch/endpoint correction: **145 tests passed**, including a run with warnings treated
+Verified in the development container after the focused history-rewrite correction: **166 tests passed**, including a run with warnings treated
 as errors, on Linux x86-64 / Python 3.11 with aiohttp 3.14.5. Ruff lint/format checks, bytecode
 compilation and dependency consistency checks passed. A wheel was built and installed into a
 separate clean virtual environment; its CLI validated the generic example without network access.
@@ -55,6 +55,17 @@ both streaming and nonstreaming variants failed at the expected missing-save ass
 (`inference, inference` instead of `inference, save, inference`). The corrected implementation
 passes those regressions. The large token counts are synthetic backend accounting, not actual
 180K-token inference or a physical large-KV benchmark.
+
+`test_compaction.py` adds 21 cases: synthetic 230K/234K histories rewritten into 10K–30K
+summary/recent-message inputs, unchanged system prompts and repositioned recent tool/reasoning/
+inline-media content, normal subsequent turns, a second rewrite/replay, genuinely reusable small
+saved roots and older branches, zero-reuse suppression/expiry/history scope, malformed/missing/
+inconsistent telemetry, small positive hits, bounded negative memory, suppressed-candidate fallback,
+active replay, context accounting and unchanged direct/proxied usage, threshold and LRU.
+The same pre-fix-source run reproduced **4 failures** (weak-prefix streaming/nonstreaming restores,
+repeated zero-reuse HDD reads, and active replay restores), while **2 summary-first compaction
+variants already passed**. This distinction is important: moved suffix matching was ruled out,
+not invented as the deployed root cause. See [the investigation](COMPACTION.md).
 
 The tests exercise conservative behavior—not perfect detection of unobservable external changes.
 The source/API limitations in [UPSTREAM.md](UPSTREAM.md) still apply.

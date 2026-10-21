@@ -32,7 +32,8 @@ and [`serve/server.py:3558–3629`](https://github.com/Niko1221/Strata/blob/e88e
 
 [`generate.cpp:11700–11920`](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/src/program/generate.cpp#L11700-L11920)
 saves running state, the live consumed token sequence, image identity, K/V layers, draft state,
-and **only the deepest checkpoint**. `live.size()` is the authoritative `n_saved` value.
+and **only one selected checkpoint** (deepest, or deepest pinned if a pin exists;
+[selection code](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/src/core/conversation_file.cpp#L1120-L1156)). `live.size()` is the authoritative `n_saved` value.
 
 Generated tokens enter `consumed` during decode
 ([14361](https://github.com/Niko1221/Strata/blob/e88ee39d1d6be6e3364183af3b39b62a7ed6f211/src/program/generate.cpp#L14361)
@@ -107,6 +108,11 @@ exact live KV utilization.
 * Linux can use O_DIRECT with buffered fallback; ordinary HDD/SSD filesystems are supported.
   Directory-fsync limitations weaken power-loss durability. Host RAM floors also apply;
   optional `--session-save-reclaim` trades RAM caches for save admission, not required here.
+
+The proxy requires a **whole saved input prefix**, not merely partial message overlap, before
+nominating a disk snapshot. The HTTP API does not expose which token/image checkpoint that file
+contains. This conservatively forgoes some possible pinned/rewind hits; see the [history-rewrite
+investigation](COMPACTION.md) for compaction behavior, bounded zero-reuse suppression and context accounting.
 
 The proxy additionally partitions by an operator-managed `compatibility_key`, engine/model/context
 and prompt-affecting request fields, then checks a full-file SHA-256 before restore. Change the

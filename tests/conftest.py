@@ -57,6 +57,9 @@ class MockStrata:
         self.context = 1000
         self.next_tokens = 400
         self.cached = 0
+        self.cache_override = None
+        self.timings_override = "auto"
+        self.include_usage = False
         self.held = None
         self.loaded = True
         self.events = []
@@ -84,7 +87,11 @@ class MockStrata:
                     "model": self.model,
                     "concurrency": {"serving": 1},
                     "activity": {"requests": self.requests, "in_flight": self.busy},
-                    "last_timings": {"cache_n": self.cached},
+                    "last_timings": (
+                        {"cache_n": self.cached, "prompt_n": self.prompt - self.cached}
+                        if self.timings_override == "auto"
+                        else self.timings_override
+                    ),
                 }
             )
         if r.path == "/slots":
@@ -169,6 +176,8 @@ class MockStrata:
                     if previous and data["messages"][: len(previous["messages"])] == previous["messages"]
                     else 0
                 )
+                if self.cache_override is not None:
+                    self.cached = self.cache_override
                 try:
                     await asyncio.sleep(self.inference_delay)
                     self.held = {"messages": data["messages"], "tokens": self.prompt + 5}
@@ -185,6 +194,18 @@ class MockStrata:
                         await response.write(b'data: {"delta":{"tool_calls":[]}}\n\ndata: [DONE]\n\n')
                         await response.write_eof()
                         return response
+                    if self.include_usage:
+                        return web.json_response(
+                            {
+                                "choices": [{"message": {"role": "assistant", "content": "synthetic"}}],
+                                "usage": {
+                                    "prompt_tokens": self.prompt,
+                                    "completion_tokens": 5,
+                                    "total_tokens": self.prompt + 5,
+                                    "prompt_tokens_details": {"cached_tokens": self.cached},
+                                },
+                            }
+                        )
                     return web.Response(
                         body=b'{"choices":[{"message":{"role":"assistant","content":"synthetic"}}]}',
                         content_type="application/json",

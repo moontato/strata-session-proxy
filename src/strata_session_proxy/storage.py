@@ -214,11 +214,13 @@ class Store:
         with self.db:
             self.db.execute("DELETE FROM snapshots WHERE name=?", (name,))
 
-    def candidate(self, identity, compatibility):
+    def candidate(self, identity, compatibility, excluded=()):
+        # A partial relationship is not a known checkpoint in a disk file. Require
+        # the saved request's full input prefix, not Identity.overlap().
         matches = [
-            (identity.overlap(Identity.unpack(json.loads(r["identity"]))), r)
+            (identity.reusable_prefix(Identity.unpack(json.loads(r["identity"]))), r)
             for r in self.rows()
-            if r["compatibility"] == compatibility
+            if r["compatibility"] == compatibility and r["name"] not in excluded
         ]
         matches = [(score, row) for score, row in matches if score]
         return max(matches, key=lambda pair: (pair[0], pair[1]["used"]))[1] if matches else None

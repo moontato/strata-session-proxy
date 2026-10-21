@@ -35,10 +35,11 @@ message field, and rejects duplicate keys/non-finite values. Each complete messa
 length-framed SHA-256 chain. Scope includes API path, authentication digests, body fields other
 than explicitly known generation-only controls, and query/extension-header digests. A user
 message is required; a shared system/developer prompt alone is insufficient. Stored state contains
-only digests, not raw history. An earlier full input prefix can match a longer history or a rewind;
-a shared user-bearing message boundary can nominate a branch (including a short first-user
-prefix, but never system-only overlap). Longest matching candidate wins, with
-recency as tiebreaker. Hashes select a candidate **only**—Strata's exact token/image-prefix checks
+only digests, not raw history. A disk candidate's **entire saved input** must be an ordered
+prefix of the incoming history, with at least a user-bearing boundary. Strata saves only one
+selected checkpoint, so an arbitrary shared message boundary, rewind, moved suffix or changed
+summary does not prove reuse is available in that file. Longest eligible full-input prefix wins,
+with recency as tiebreaker. There is no global minimum length/overlap percentage. Hashes select a candidate **only**—Strata's exact token/image-prefix checks
 are the final authority, especially when an assistant response was edited.
 
 Two clients sending identical histories cannot be distinguished without client cooperation.
@@ -50,8 +51,8 @@ is hashed. Unknown APIs, bodies over the cap, compressed inputs, invalid JSON an
 
 ### Continuation is not candidate overlap
 
-`Identity.overlap()` is symmetric and is used **only to rank saved candidates**. It must never
-prove that the active session can be overwritten without preservation. `Identity.continues()`
+`Identity.overlap()` is symmetric and describes a relationship only; it is **not** sufficient
+for disk selection (`reusable_prefix`) or safe overwriting of an active slot. `Identity.continues()`
 is directional: the incoming chain must strictly extend the **entire** active input chain,
 with the same scope, not merely share its beginning. The prior input must end at a user/tool
 boundary; the extension must start with an assistant message and end at a new user/tool boundary.
@@ -59,8 +60,10 @@ boundary; the extension must start with an assistant message and end at a new us
 Sibling branches, rewinds, identical-input retries/regenerations, assistant-only prefills,
 new system/developer instructions and unclear response boundaries take the switch path. Eligible outgoing state is saved **before**
 forwarding. A normal full-history extension, including a tool-call/result turn, avoids snapshot
-I/O. Role boundaries are transient metadata; the on-disk fingerprint format is unchanged, and
-loaded candidates cannot be mistaken for an observed active history.
+I/O. Replays still preserve eligible outgoing generated state, but do not restore an older copy
+over the same full input already verified in the active slot. Role boundaries are transient
+metadata; the on-disk fingerprint format is unchanged, and loaded candidates cannot be mistaken
+for an observed active history.
 
 The active identity describes the last **incoming request**, not the complete idle KV. Strata
 also holds consumed generated assistant tokens. The normal extension rule assumes the appended
@@ -84,7 +87,9 @@ snapshot directories. The asyncio lock spans:
 3. On a switch, locate/protect the incoming candidate. If outgoing prompt utilization reaches
    the threshold, request save to a fresh UUID name, validate its success and local file,
    then commit/retain it. Do not save after each message or on shutdown.
-4. Validate a candidate's full SHA-256; restore it. Clear refusals (invalid/missing or explicit
+4. Skip a recently confirmed zero-reuse file/input pair before full-file reads (10-minute,
+   128-entry, process-local bound; details below). Validate an eligible candidate's full SHA-256;
+   restore it. Clear refusals (invalid/missing or explicit
    memory refusal) can fall back to ordinary inference. Ambiguous failures block new mutations.
 5. Forward the original request, including the entire streaming lifetime. After EOF, confirm
    backend idle. Only a successful, identified request with unchanged boot/config and exactly
@@ -108,6 +113,25 @@ mutation, a durable `blocked` marker is written. A crash/timeout leaves the mark
 refuses state-changing traffic until offline operator recovery. Unexpected management failures also
 latch the in-memory gate closed, including metadata write failures. A response already sent cannot
 be retroactively replaced; no fake SSE error is appended, and subsequent mutations fail clearly.
+
+### Rewritten/compacted input and futile restores
+
+A changed prefix changes **every** later cumulative digest: retained recent messages are not
+matching KV suffixes. The compacted request becomes the new active input after correlated
+completion, and normal continuations incur no snapshot I/O. We do not parse compaction markers
+or guess summary meaning. Preserving a system or early user message alone does not nominate
+an old full-history file. Small saved roots can still support branches that preserve their
+whole input. Some possibly reusable partial/pinned checkpoints are deliberately not guessed.
+
+Confirmed zero-reuse pairs are temporarily suppressed, scoped to file UUID/digest, compatibility,
+backend boot and authenticated effective input, before hashing/restore. The bounded memory is
+not persisted; it expires after 10 minutes (skips do not extend it), holds at most 128 pairs, and
+permits a new attempt on changed input/config/file/boot. Missing or inconsistent telemetry is
+unknown, not a miss. The next eligible full-input candidate can be considered without an internal
+restore-retry loop. No suppression/deletion is based on approximate text similarity or file size.
+
+See [compaction investigation and safe upgrade](COMPACTION.md) for proven bugs, reproductions,
+public source citations and why repeated frontend compaction is **not** conclusively explained.
 
 ## Boundaries that cannot be solved in a transparent proxy
 
@@ -190,8 +214,12 @@ fingerprints, random snapshot names and fixed error categories. Local `status` r
 probing Strata. All state is sensitive even though histories are hashes: fingerprints can leak equality
 and may support guessing if the catalog is disclosed. Directory mode 0700 is mandatory.
 
-A successful restore followed by reported `last_timings.cache_n` contributes
-`min(cache_n, prompt_tokens)` to **estimated prompt tokens spared**. This is real backend reuse
+A successful restore followed by validated `last_timings.cache_n` contributes
+`cache_n` to **estimated prompt tokens spared**. Validation requires nonnegative integer
+`cache_n` + `prompt_n` equal to the observed prompt count; missing/malformed/inconsistent
+telemetry increments `restore_reuse_unknown`, not a hit or zero. Only confirmed zero increments
+`restore_without_reported_hit` and adds short-lived suppression; `restore_suppressed` counts
+eligible skipped file/input pairs. Historical counters from older versions are not rewritten. This is real backend reuse
 but only an estimate of attribution to disk restoration: some RAM checkpoint reuse could have
 occurred anyway. `cache_hits` means reported reuse after restore, not mathematical incremental
 savings. Without observations it does not manufacture hits.

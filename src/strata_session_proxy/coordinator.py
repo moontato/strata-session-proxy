@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
+from collections import OrderedDict
 
 from .backend import BackendError, Uncertain
 from .storage import StorageError
@@ -16,12 +18,18 @@ class Blocked(Exception):
 
 
 class Coordinator:
+    # Brief, process-local negative cache, never a permanent snapshot blacklist.
+    MISS_TTL_SECONDS = 600
+    MAX_RESTORE_MISSES = 128
+
     def __init__(self, backend, store, config):
         self.backend, self.store, self.config = backend, store, config
         self.lock = asyncio.Lock()
         self.active = None
         self.observed = None
         self.restored = False
+        self.restore_attempt = None
+        self.restore_misses = OrderedDict()
         self.failed = False
         self.store.meta("active", "")  # Never infer active state across proxy restarts.
         self.store.meta("context", "null")
@@ -45,8 +53,28 @@ class Coordinator:
             json.dumps([self.config.snapshots.compatibility_key, obs.boot[1:]]).encode()
         ).hexdigest()
 
+    def restore_key(self, row, identity, obs):
+        # UUID+digest scopes to one completed file, identity to the effective input,
+        # boot+compatibility to backend lifetime/config. No prompts or responses.
+        boot = hashlib.sha256(json.dumps(obs.boot).encode()).hexdigest()
+        return row["name"], row["sha256"], row["compatibility"], boot, identity.scope, identity.key
+
+    def suppressed(self, key):
+        now = time.monotonic()
+        for old, until in list(self.restore_misses.items()):
+            if until <= now:
+                del self.restore_misses[old]
+        return key in self.restore_misses
+
+    def remember_miss(self, key):
+        self.restore_misses[key] = time.monotonic() + self.MISS_TTL_SECONDS
+        self.restore_misses.move_to_end(key)
+        while len(self.restore_misses) > self.MAX_RESTORE_MISSES:
+            self.restore_misses.popitem(last=False)
+
     async def before(self, identity):
         self.restored = False
+        self.restore_attempt = None
         if self.failed or self.store.meta("blocked"):
             raise Blocked("snapshot state requires local operator recovery")
         try:
@@ -65,8 +93,18 @@ class Coordinator:
         row = None
         try:
             self.store.check()
-            if identity:
-                row = self.store.candidate(identity, self.compatibility(obs))
+            if identity and not identity.reusable_prefix(self.active):
+                # The verified active slot already holds the same full input on a
+                # replay/unclear extension. Preserve its generated tail if eligible,
+                # but do not replace it with an older disk copy of that input.
+                # Exclude a proven zero-reuse pair BEFORE any full-file reads.
+                # Try the next eligible full-input prefix, not the same failed file.
+                excluded = set()
+                while row := self.store.candidate(identity, self.compatibility(obs), excluded):
+                    if not self.suppressed(self.restore_key(row, identity, obs)):
+                        break
+                    excluded.add(row["name"])
+                    self.store.count("restore_suppressed")
         except (OSError, StorageError):
             self.store.count("failures")
         if self.active and self.observed:
@@ -76,6 +114,8 @@ class Coordinator:
             try:
                 if row:
                     await self.restore(row)
+                    if self.restored:
+                        self.restore_attempt = self.restore_key(row, identity, obs)
                 else:
                     self.store.count("cache_misses")
             except (OSError, StorageError):
@@ -212,10 +252,15 @@ class Coordinator:
             ),
         )
         if self.restored:
-            if obs.cached:
+            if obs.cached is None:
+                # Unknown/stale telemetry is neither a hit nor a confirmed miss.
+                self.store.count("restore_reuse_unknown")
+            elif obs.cached > 0:
                 self.store.count("cache_hits")
                 # Actual reported reused tokens, estimated attribution: in-RAM reuse might have
                 # happened without us. Never describe this as measured incremental energy savings.
                 self.store.count("estimated_prompt_tokens_spared", min(obs.cached, obs.prompt))
             else:
                 self.store.count("restore_without_reported_hit")
+                if self.restore_attempt is not None:
+                    self.remember_miss(self.restore_attempt)

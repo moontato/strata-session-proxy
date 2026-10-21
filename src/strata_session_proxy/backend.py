@@ -23,7 +23,7 @@ class Observation:
     prompt: int
     context: int
     idle: bool
-    cached: int
+    cached: int | None
 
     @property
     def stamp(self):
@@ -86,9 +86,19 @@ class Backend:
             if any(type(v) is not int or v < 0 for v in (requests, prompt, ctx)) or not ctx or prompt > ctx:
                 raise ValueError()
             boot = (status["started"], status["engine"], status["model"], ctx)
-            cached = (status.get("last_timings") or {}).get("cache_n", 0)
-            if type(cached) is not int or cached < 0:
-                cached = 0
+            # Missing/malformed telemetry is UNKNOWN, never a confirmed miss. If
+            # present, freshly read + reused must describe this observed prompt.
+            timings = status.get("last_timings")
+            cached = timings.get("cache_n") if isinstance(timings, dict) else None
+            read = timings.get("prompt_n") if isinstance(timings, dict) else None
+            if (
+                type(cached) is not int
+                or not 0 <= cached <= prompt
+                or type(read) is not int
+                or read < 0
+                or read + cached != prompt
+            ):
+                cached = None
             return Observation(
                 boot,
                 requests,

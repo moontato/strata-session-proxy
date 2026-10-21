@@ -98,10 +98,24 @@ class Identity:
     def unpack(cls, value):
         return cls(value["scope"], tuple(value["chain"]), tuple(value["anchors"]))
 
-    def overlap(self, other):
-        """Candidate score only: longest exact input prefix that includes a user message.
+    def reusable_prefix(self, saved):
+        """Conservative disk candidate score: the WHOLE saved input must be a prefix.
 
-        A positive score does not establish continuation or ownership of the active slot.
+        A disk file keeps one selected (deepest, or pinned) checkpoint, not every boundary.
+        Partial overlap, rewinds and moved suffixes do not prove that checkpoint
+        is compatible. A complete prior input can nominate its end-of-input/turn
+        checkpoint; Strata still decides exact token/image compatibility. No
+        message-count, text-length or token-overlap threshold is guessed here.
+        """
+        if saved is None or self.scope != saved.scope or saved.key not in saved.anchors:
+            return 0
+        n = len(saved.chain)
+        return n if len(self.chain) >= n and self.chain[:n] == saved.chain else 0
+
+    def overlap(self, other):
+        """Relationship score only: shared ordered user-bearing prefix.
+
+        Not sufficient for disk selection (use reusable_prefix) or continuation.
         """
         if other is None or self.scope != other.scope:
             return 0

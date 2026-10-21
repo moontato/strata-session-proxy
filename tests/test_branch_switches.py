@@ -83,7 +83,9 @@ async def test_multiple_siblings_choose_longest_candidate_not_recent_sibling(har
     saved_a = manager.store.rows()[0]["name"]
     await send(client, url, manager, mock, branch("C"))
     saved_b = next(r["name"] for r in manager.store.rows() if r["name"] != saved_a)
-    # A can help prefill C's shared prefix, but neither overlap establishes continuation.
+    # C diverges before either saved full input: shared earlier messages alone
+    # do not nominate A/B disk checkpoints or establish active continuation.
+    assert not mock.events.count("restore")
     await send(client, url, manager, mock, branch("A"))
     assert mock.snapshot_actions[-1] == ("restore", saved_a)
     await send(client, url, manager, mock, branch("B"))
